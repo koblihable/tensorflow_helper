@@ -13,6 +13,8 @@ import numpy as np
 import random
 import os
 import pathlib
+import zipfile
+import datetime
 
 
 ###-----------data visualization-----------###
@@ -43,7 +45,21 @@ def view_random_img(target_dir, target_class):
     plt.title(target_class)
     plt.axis("off")
     print(f"Image shape: {img.shape}")
-    return img
+
+
+def get_random_image_and_class(target_dir, train_data):
+    """
+    :param target_dir: (str) path to train or test directory
+    :param train_data: train_data returned by image_dataset_from_directory
+    :return: image object and target class string
+    """
+    #TODO test with ImageDataGenerator
+    target_class = random.choice(train_data.class_names)
+    target_folder = target_dir + "/" + target_class
+    random_image = random.choice(os.listdir(target_folder))
+    img = mpimg.imread(target_folder + "/" + random_image)
+
+    return img, target_class
 
 
 def view_multiple_images(train_data, labels):
@@ -64,6 +80,11 @@ def view_multiple_images(train_data, labels):
 
 ###-----------data manipulation-----------###
 
+def unzip_file(file):
+    zip_ref = zipfile.ZipFile(file)
+    zip_ref.extractall()
+    zip_ref.close()
+
 def load_and_prep_image(filename, img_shape=224, scale=True):
     """
     Reads in an image from filename, turns it into a tensor and reshapes into
@@ -81,9 +102,9 @@ def load_and_prep_image(filename, img_shape=224, scale=True):
         return img
 
 
-def generate_image_data(data_dir, target_size=(224,224), class_mode="binary"):
+def generate_image_data_idg(data_dir, target_size=(224,224), class_mode="binary"):
     """
-    loads images for testing purposes
+    loads images for testing purposes using ImageDataGenerator
     :param data_dir: (str) path to the test data
     :param target_size: (tuple) default is (224,224)
     :param class_mode: (str) default is binary, change to categorical if needed
@@ -93,13 +114,13 @@ def generate_image_data(data_dir, target_size=(224,224), class_mode="binary"):
     dataset = datagen.flow_from_directory(data_dir,
                                        target_size=target_size,
                                        class_mode=class_mode)
-    data, labels = next(dataset)
-    return data, labels
+
+    return dataset
 
 
-def generate_augmented_data(data_dir, amount=0.2, target_size=(224,224), class_mode="binary", shuffle=True):
+def generate_augmented_data_idg(data_dir, amount=0.2, target_size=(224,224), class_mode="binary", shuffle=True):
     """
-    adds augmentation to images to enhance training. Rescales images to 0-1
+    adds augmentation to images to enhance training using ImageDataGenerator. Rescales images to 0-1
     :param data_dir: (str) path to the train dataset
     :param amount: (float) the degree of augmentation, default is 0.2
     :param target_size: (tuple) defaults to (224,224)
@@ -114,18 +135,45 @@ def generate_augmented_data(data_dir, amount=0.2, target_size=(224,224), class_m
                                  width_shift_range=amount,
                                  height_shift_range=amount,
                                  horizontal_flip=True)
-    augmented_data = datagen.flow_from_directory(data_dir,
+    augmented_dataset = datagen.flow_from_directory(data_dir,
                                                  target_size=target_size,
                                                  batch_size=32,
                                                  class_mode=class_mode,
                                                  shuffle=shuffle)
-    aug_images, aug_labels = next(augmented_data)
-    return aug_images, aug_labels
+    return augmented_dataset
+
+
+def generate_image_data_idfd(train_dir, test_dir, label_mode="categorical"):
+    """
+    generates data using image_dataset_from_directory
+    :param train_dir:
+    :param test_dir:
+    :param label_mode:
+    :return:
+    """
+    train_data = tf.keras.preprocessing.image_dataset_from_directory(train_dir,
+                                                                     image_size=(224,224),
+                                                                     label_mode=label_mode)
+
+    test_data = tf.keras.preprocessing.image_dataset_from_directory(test_dir,
+                                                                    image_size=(224,224),
+                                                                    label_mode=label_mode)
+    return train_data, test_data
+
+
+def get_data_and_labels_from_gen_dataset(dataset):
+    """
+    returns images and labels from ImageDataGenerator generated dataset
+    :param dataset: data returned by generate_augmented_data()
+    :return: images and labels in the form of tensors
+    """
+    data, labels = next(dataset)
+    return data, labels
 
 
 def display_augmented_image(images, aug_images):
     """
-    plots an augmented image next the original
+    plots an augmented image next to the original
     :param images: (array) output from ImageDataGenerator
     :param aug_images: (array) output from ImageDataGenerator
     :return: plot
@@ -139,6 +187,9 @@ def display_augmented_image(images, aug_images):
     plt.imshow(aug_images[random_number])
     plt.title("Augmented image")
     plt.axis=False
+
+
+
 
 
 ###-----------data visualization with predictions-----------###
@@ -242,7 +293,8 @@ def get_image_classification_predictions(model, test_data):
     :param test_data: (str) path to generated image data using generate_image_data() or load_and_prep_image()
     :return: predictions
     """
-    images, labels = generate_image_data(test_data)
+    dataset = generate_image_data_idg(test_data)
+    images, labels = get_data_and_labels_from_gen_dataset(dataset)
     probabilities = model.predict(images)
 
     # check for multiclass vs. binary classification
@@ -341,7 +393,7 @@ def create_feature_extraction_model(model_url, image_shape, num_classes=10):
     :param model_url: (str)
     :param image_shape: (tuple) shape of the input image
     :param num_classes: (int) defaults to 10
-    :return: unfir model instance
+    :return: unfit model instance
     """
     model = hub.resolve(model_url)
     inputs = tf.keras.Input(
@@ -365,3 +417,14 @@ def create_feature_extraction_model(model_url, image_shape, num_classes=10):
     model = tf.keras.Model(inputs=inputs, outputs=outputs)
 
     return model
+
+
+def create_tensorboard_callback(dir_name, experiment_name):
+    """
+    :param dir_name: (str) path to directory
+    :param experiment_name: (str) experiment name
+    """
+    log_dir = dir_name + "/" + experiment_name + "/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir)
+    print(f"Saving TensorBoard  log files to {log_dir}")
+    return tensorboard_callback
